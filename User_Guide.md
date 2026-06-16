@@ -44,6 +44,7 @@ This peripheral emulates a subset of the SC16IS740 UART-to-I2C expander.
 - **Write**: Controls the RS-485 Transmit Enable (RTS) pin.
   - Write `0x02` to enable manual RS-485 transmit mode.
   - Write `0x00` to disable/return to default.
+  
   *Note: Manual control via MCR is only required if specific timing or slower control of the RS-485 transmit enable pin is needed. By default, the firmware automatically controls this pin during UART transmissions.*
 
 #### LSR (0x28)
