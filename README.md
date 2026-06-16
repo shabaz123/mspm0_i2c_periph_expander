@@ -17,7 +17,9 @@ The actual I2C addresses can be modified, by setting A0 and A1 address pins. Thu
   - **Baud Rate**: Pre-configured to 9600, adjustable with a register setting.
 - **I2C ADC Emulation**: Loosely based on **AD7291** 12-bit ADC, with 3 channels available.
   - **I2C Base Address (A1:0 = 00)**: `0x20`.
-  **PWM/Frequency Capture**: Period (1/Freq) and Duty Cycle measurement input.
+- **AC RMS Measurement**: AC RMS, Peak-to-Peak, DC level and Frequency measurement analog input.
+  - **I2C Base Address (A1:0 = 00)**: `0x20`
+- **PWM/Frequency Capture**: Period (1/Freq) and Duty Cycle measurement digital input.
   - **I2C Base Address (A1:0 = 00)**: `0x20`
 
 ## Hardware Mapping (Physical package is TI 28-pin DGS)
@@ -28,6 +30,7 @@ The actual I2C addresses can be modified, by setting A0 and A1 address pins. Thu
 - **ADC Chan 0**: PA27/A0 Physical Pin 2
 - **ADC Chan 1**: PA26/A1 Physical Pin 1
 - **ADC Chan 2**: PA25/A2 Physical Pin 28
+- **AC RMS Chan**: PA24/A3 Physical Pin 27
 - **Period/Duty Capture**: PA10/TIMG4_C0 Physical Pin 15
 - **I2C SDA**: PA0 (PinCM 1) Physical Pin 4
 - **I2C SCL**: PA1 (PinCM 2) Physical Pin 5
@@ -71,8 +74,11 @@ End-to-end testing can be performed by attaching a Pi Pico to the I2C and UART c
 To run the end-to-end tests, go to the test_harness folder and type:
 
 ```powershell
-# Run Tests
+# Run Tests via I2C, with user prompts for UART input via user-provided terminal
 python .\expander_test.py
+
+# Run Tests end-to-end with I2C and UART controlled by the Python script
+python .\expander_test.py --uart-test-port COM3
 ```
 
 
