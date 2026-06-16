@@ -57,6 +57,24 @@ volatile bool captureValid;
 volatile uint16_t capturePeriodCounts;
 volatile uint16_t captureHighCounts;
 
+// acmeas related variables
+volatile uint8_t acmeas_state;
+volatile uint16_t acmeas_rms_result;
+volatile uint16_t acmeas_pp_result;
+volatile uint16_t acmeas_freq_result;
+volatile uint16_t acmeas_dclevel_result;
+volatile uint64_t sum_sq_adc;        // RMS accumulator
+volatile uint32_t sum_adc;       // DC offset accumulator
+volatile uint32_t sample_count;  // number of samples
+uint32_t  dc_level;     // estimated or fixed midpoint, e.g. 2048
+int32_t  x;             // centred ADC sample
+uint16_t min_adc;       // for p-p
+uint16_t max_adc;
+uint16_t pp_counts;
+uint32_t rms_counts;
+freq_counter_t freq_counter;
+volatile bool adc_restore_pending;
+
 // Wake-timer based stale detection: no capture for ~1 second => invalid
 volatile uint32_t wakeTicks;
 volatile uint32_t captureLastTick;
@@ -82,6 +100,9 @@ static const DL_I2C_ClockConfig localTAR_I2CClockConfig = {
     .clockSel = DL_I2C_CLOCK_BUSCLK,
     .divideRatio = DL_I2C_CLOCK_DIVIDE_1,
 };
+
+
+
 
 // this is a copy of SYSCFG_DL_TAR_I2C_init
 // but modiied so we can dynamically set the I2C addresses
@@ -126,9 +147,11 @@ void System_init(void)
     DL_GPIO_initPeripheralAnalogFunction(GPIO_ADC0_IOMUX_C0);
     DL_GPIO_initPeripheralAnalogFunction(GPIO_ADC0_IOMUX_C1);
     DL_GPIO_initPeripheralAnalogFunction(GPIO_ADC0_IOMUX_C2);
+    DL_GPIO_initPeripheralAnalogFunction(GPIO_ADC0_IOMUX_C3);
     SYSCFG_DL_SYSCTL_init();
     SYSCFG_DL_CAPTURE_0_init();
     SYSCFG_DL_WAKEUP_TIMER_init();
+    SYSCFG_DL_TIMER_ACMEAS_init();
     local_SYSCFG_DL_TAR_I2C_init();
     SYSCFG_DL_UART_0_init();
     SYSCFG_DL_ADC0_init();
@@ -163,6 +186,13 @@ void System_init(void)
     /* Start the ADC emulation module */
     ad7291_open(&tar_i2c);
 
+    // acmeas
+    acmeas_state = ACMEAS_STATE_IDLE;
+    dc_level = 2048;
+    min_adc = 2048;
+    max_adc = 2048;
+    adc_restore_pending = false;
+
     /* Start the I2C target driver */
     I2CTarDriver_open(&tar_i2c);
 
@@ -182,6 +212,8 @@ void System_init(void)
     /* Enable interrupts used by the application */
     NVIC_EnableIRQ(WAKEUP_TIMER_INST_INT_IRQN);
     NVIC_EnableIRQ(TAR_I2C_INST_INT_IRQN);
+    NVIC_ClearPendingIRQ(ADC0_INST_INT_IRQN);
+    NVIC_EnableIRQ(ADC0_INST_INT_IRQN);
 }
 
 void System_sleepUntilInterrupt(void)
@@ -267,3 +299,108 @@ void CAPTURE_0_INST_IRQHandler(void)
             break;
     }
 }
+
+// ****  acmeas  ****
+
+// this function is used when acmeas completes, to go back to the normal AD7291 emulation mode
+#ifdef OLD_CODE
+static void adc_config_software_trigger(void)
+{
+    DL_ADC12_disableConversions(ADC0_INST);
+
+    DL_ADC12_initSeqSample(ADC0_INST,
+        DL_ADC12_REPEAT_MODE_DISABLED,
+        DL_ADC12_SAMPLING_SOURCE_AUTO,
+        DL_ADC12_TRIG_SRC_SOFTWARE,
+        DL_ADC12_SEQ_START_ADDR_00,
+        DL_ADC12_SEQ_END_ADDR_03,
+        DL_ADC12_SAMP_CONV_RES_12_BIT,
+        DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
+
+    DL_ADC12_enableConversions(ADC0_INST);
+}
+#endif
+
+
+
+// add_acmeas_sample contains the accumulators so that DC offset and AC RMS can be calculated 
+void add_acmeas_sample(uint16_t adc)
+{
+    sum_adc += (uint32_t)adc;  // accumulate for DC offset calculations
+    sum_sq_adc += (uint64_t)adc * adc;  // accumulate for RMS calculations
+    sample_count++;
+
+    if (adc < min_adc) min_adc = adc;
+    if (adc > max_adc) max_adc = adc;
+}
+
+void freq_add_sample(freq_counter_t *f, uint16_t adc)
+{
+    f->sample_index++;
+
+    switch (f->state) {
+    case WAIT_FOR_NEGATIVE:
+        if (adc < ACMEAS_FCALC_NEG_THRESH) {
+            f->state = WAIT_FOR_POSITIVE;
+        }
+        break;
+
+    case WAIT_FOR_POSITIVE:
+        if (adc > ACMEAS_FCALC_POS_THRESH) {
+            if (f->last_pos_crossing != 0) {
+                f->period_samples = f->sample_index - f->last_pos_crossing;
+                f->valid = 1;
+            }
+
+            f->last_pos_crossing = f->sample_index;
+            f->state = WAIT_FOR_NEGATIVE;
+        }
+        break;
+    }
+}
+
+void ADC0_INST_IRQHandler(void)
+{
+    switch (DL_ADC12_getPendingInterrupt(ADC0_INST)) {
+        case DL_ADC12_IIDX_MEM3_RESULT_LOADED:
+            DL_Timer_clearInterruptStatus(TIMER_ACMEAS_INST, \
+                DL_TIMER_INTERRUPT_ZERO_EVENT);
+            if (acmeas_state == ACMEAS_STATE_RUNNING)
+            {
+                if (sample_count < ACMEAS_MAX_SAMPLE_COUNT)
+                {
+                    uint16_t adc = DL_ADC12_getMemResult(ADC0, DL_ADC12_MEM_IDX_3);
+                    add_acmeas_sample(adc);
+                    freq_add_sample(&freq_counter, adc);
+                }
+                else
+                {
+                    acmeas_state = ACMEAS_STATE_DONE;
+                    // stop the timer to stop sampling
+                    DL_TimerG_stopCounter(TIMER_ACMEAS_INST);
+                    // NVIC_DisableIRQ(TIMER_ACMEAS_INST_INT_IRQN);
+                    //adc_config_software_trigger();
+                    adc_restore_pending = true;
+                    
+                    // calculate results
+                    uint32_t n = sample_count;
+                    dc_level = (uint32_t)((sum_adc + (n / 2)) / n);
+                    uint64_t mean_sq = sum_sq_adc / n;
+                    uint64_t dc_sq   = (uint64_t)dc_level * dc_level;
+                    uint64_t ac_var = (mean_sq > dc_sq) ? (mean_sq - dc_sq) : 0;
+
+                    acmeas_rms_result = (uint16_t)sqrt((double)ac_var);
+                    acmeas_dclevel_result = (uint16_t)dc_level;
+                    acmeas_pp_result = max_adc - min_adc;
+
+                    acmeas_freq_result =
+                        freq_counter.valid ? (ACMEAS_SAMPLE_RATE_HZ / freq_counter.period_samples) : 0;
+                }
+            }
+            break;
+        default:
+            break;
+    }
+
+}
+

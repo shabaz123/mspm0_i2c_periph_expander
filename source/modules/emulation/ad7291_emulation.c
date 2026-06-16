@@ -10,7 +10,7 @@
 /*!
  * @brief Total # analog input channels
  */
-#define AD7291_CH_CNT 3
+#define AD7291_CH_CNT 4
 
 /*!
  * @brief Total # of 16-bit user registers in the AD7291
@@ -72,13 +72,28 @@ typedef union
 // capture related definitions
 #define VREG_PERIOD_COUNTS      0x40
 #define VREG_DUTY_PERCENTX10    0x41
-
 // capture global vars from system.c
 extern volatile bool captureValid;
 extern volatile uint16_t capturePeriodCounts;
 extern volatile uint16_t captureHighCounts;
 extern volatile uint32_t wakeTicks;
 extern volatile uint32_t captureLastTick;
+
+// acmeas related definitions
+#define ACMEAS_START_REG 0x50
+#define ACMEAS_RESULT_REG 0x51
+extern volatile uint8_t acmeas_state;
+extern volatile uint16_t acmeas_rms_result;
+extern volatile uint16_t acmeas_pp_result;
+extern volatile uint16_t acmeas_freq_result;
+extern volatile uint16_t acmeas_dclevel_result;
+extern volatile uint64_t sum_sq_adc;        // RMS accumulator
+extern volatile uint32_t sum_adc;       // DC offset accumulator
+extern volatile uint32_t sample_count;  // number of samples
+extern volatile uint16_t min_adc;       // for p-p
+extern volatile uint16_t max_adc;
+extern freq_counter_t freq_counter;
+extern volatile bool adc_restore_pending;
 
 /**
  * @brief   AD7291 emulated register file storage
@@ -92,7 +107,8 @@ const uint8_t ad7291_chLUT[AD7291_CH_CNT] =
 {
     DL_ADC12_INPUT_CHAN_0,
     DL_ADC12_INPUT_CHAN_1,
-    DL_ADC12_INPUT_CHAN_2
+    DL_ADC12_INPUT_CHAN_2,
+    DL_ADC12_INPUT_CHAN_3
 };
 
 /**
@@ -144,6 +160,68 @@ static uint16_t AD7291_convertAnalogInput(uint8_t channel);
 /**
  * Standard function implementations
  */
+
+// this is used for the AC measurement mode,
+// i.e. when the user writes to register ACMEAS_START_REG
+static void adc_config_acmeas_event_trigger(void)
+{
+    DL_ADC12_disableConversions(ADC0_INST);
+
+    DL_ADC12_initSeqSample(ADC0_INST,
+        DL_ADC12_REPEAT_MODE_ENABLED,
+        DL_ADC12_SAMPLING_SOURCE_AUTO,
+        DL_ADC12_TRIG_SRC_EVENT,
+        DL_ADC12_SEQ_START_ADDR_03,
+        DL_ADC12_SEQ_END_ADDR_03,
+        DL_ADC12_SAMP_CONV_RES_12_BIT,
+        DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
+
+    DL_ADC12_setSubscriberChanID(ADC0_INST, ADC0_INST_SUB_CH);
+
+    DL_ADC12_clearInterruptStatus(ADC0_INST,
+        DL_ADC12_INTERRUPT_MEM3_RESULT_LOADED);
+
+    DL_ADC12_enableInterrupt(ADC0_INST,
+        DL_ADC12_INTERRUPT_MEM3_RESULT_LOADED);
+
+    NVIC_ClearPendingIRQ(ADC0_INST_INT_IRQN);
+    NVIC_EnableIRQ(ADC0_INST_INT_IRQN);
+
+    DL_ADC12_enableConversions(ADC0_INST);
+}
+
+// this function is used when acmeas completes, to go back to the normal AD7291 emulation mode
+static void adc_config_software_trigger(void)
+{
+    DL_ADC12_disableConversions(ADC0_INST);
+
+    DL_ADC12_disableInterrupt(ADC0_INST,
+        DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED |
+        DL_ADC12_INTERRUPT_MEM1_RESULT_LOADED |
+        DL_ADC12_INTERRUPT_MEM2_RESULT_LOADED |
+        DL_ADC12_INTERRUPT_MEM3_RESULT_LOADED);
+
+    NVIC_DisableIRQ(ADC0_INST_INT_IRQN);
+    NVIC_ClearPendingIRQ(ADC0_INST_INT_IRQN);
+
+    DL_ADC12_clearInterruptStatus(ADC0_INST,
+        DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED |
+        DL_ADC12_INTERRUPT_MEM1_RESULT_LOADED |
+        DL_ADC12_INTERRUPT_MEM2_RESULT_LOADED |
+        DL_ADC12_INTERRUPT_MEM3_RESULT_LOADED);
+
+    DL_ADC12_initSeqSample(ADC0_INST,
+        DL_ADC12_REPEAT_MODE_DISABLED,
+        DL_ADC12_SAMPLING_SOURCE_AUTO,
+        DL_ADC12_TRIG_SRC_SOFTWARE,
+        DL_ADC12_SEQ_START_ADDR_00,
+        DL_ADC12_SEQ_END_ADDR_02,
+        DL_ADC12_SAMP_CONV_RES_12_BIT,
+        DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
+
+    DL_ADC12_enableConversions(ADC0_INST);
+}
+
 
 // Capture related functions
 static bool capture_isFreshAndValid(void)
@@ -198,7 +276,7 @@ void ad7291_open(i2c_tar_driver_t *pI2CTarDriverInst)
     /*
      * Take dummy conversion of the internal supply monitor to fire up the ADC
      */
-    //AD7291_convertAnalogInput(0);  // chan 15 is not configured, so use 0
+    AD7291_convertAnalogInput(0);  // chan 15 is not configured, so use 0
 
     return;
 }
@@ -224,7 +302,7 @@ uint8_t ad7291_getNextChannel(void)
     do {
         channelSel = ad7291_nextChannel;
         channelSelMask = 0x80 >> ad7291_nextChannel;
-        if (++ad7291_nextChannel >= 3)
+        if (++ad7291_nextChannel >= 4)
         {
             ad7291_nextChannel = 0;
         }
@@ -240,7 +318,15 @@ uint16_t AD7291_convertAnalogInput(uint8_t channel)
     DL_ADC12_clearInterruptStatus(ADC0,
         DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED |
         DL_ADC12_INTERRUPT_MEM1_RESULT_LOADED |
-        DL_ADC12_INTERRUPT_MEM2_RESULT_LOADED);
+        DL_ADC12_INTERRUPT_MEM2_RESULT_LOADED |
+        DL_ADC12_INTERRUPT_MEM3_RESULT_LOADED);
+
+    NVIC_ClearPendingIRQ(ADC0_INST_INT_IRQN);
+
+    if (adc_restore_pending) {
+        adc_config_software_trigger();
+        adc_restore_pending = false;
+    }
 
     DL_ADC12_enableConversions(ADC0);
     DL_ADC12_startConversion(ADC0);
@@ -260,12 +346,15 @@ uint16_t AD7291_convertAnalogInput(uint8_t channel)
             return DL_ADC12_getMemResult(ADC0, DL_ADC12_MEM_IDX_1);
         case DL_ADC12_INPUT_CHAN_2:
             return DL_ADC12_getMemResult(ADC0, DL_ADC12_MEM_IDX_2);
+        case DL_ADC12_INPUT_CHAN_3:
+            return DL_ADC12_getMemResult(ADC0, DL_ADC12_MEM_IDX_3);
         default:
             return 0xFFFF;
     }
 }
 
 
+// this is called when the master writes to the I2C target 
 void ad7291_i2c_rx_callback(uint32_t bytes, i2c_tar_driver_call_trig_t trig)
 {
     ad7291_reg_t updatedReg;
@@ -291,7 +380,9 @@ void ad7291_i2c_rx_callback(uint32_t bytes, i2c_tar_driver_call_trig_t trig)
             newRegFilePtr = I2CTarDriver_read(ad7291_i2c_tar_driver_handle);
             if ((newRegFilePtr < AD7291_REG_INVALID) ||
                 (newRegFilePtr == VREG_PERIOD_COUNTS) ||
-                (newRegFilePtr == VREG_DUTY_PERCENTX10))
+                (newRegFilePtr == VREG_DUTY_PERCENTX10) ||
+                (newRegFilePtr == ACMEAS_START_REG) ||
+                (newRegFilePtr == ACMEAS_RESULT_REG))
             {
                 ad7291_regFilePtr = newRegFilePtr;
             }
@@ -300,14 +391,81 @@ void ad7291_i2c_rx_callback(uint32_t bytes, i2c_tar_driver_call_trig_t trig)
         if (ad7291_regFilePtr == AD7291_REG_VCONV_RES)
         {
             ad7291_resetNextChannel();
+        } else if (ad7291_regFilePtr == ACMEAS_START_REG)
+        {
+            // we only start if the state is not running, otherwise ignore the write
+            if (acmeas_state != ACMEAS_STATE_RUNNING)
+            {
+                acmeas_state = ACMEAS_STATE_RUNNING;
+
+                DL_TimerG_stopCounter(TIMER_ACMEAS_INST);
+                DL_Timer_clearInterruptStatus(TIMER_ACMEAS_INST, DL_TIMER_INTERRUPT_ZERO_EVENT);
+                adc_config_acmeas_event_trigger();
+                //NVIC_ClearPendingIRQ(TIMER_ACMEAS_INST_INT_IRQN);
+                //NVIC_EnableIRQ(TIMER_ACMEAS_INST_INT_IRQN);
+
+                freq_counter.state = WAIT_FOR_NEGATIVE;
+                freq_counter.sample_index = 0;
+                freq_counter.last_pos_crossing = 0;
+                freq_counter.period_samples = 0;
+                freq_counter.valid = 0;
+                sum_sq_adc = 0; // reset the accumulators
+                sum_adc = 0;
+                sample_count = 0;
+                acmeas_rms_result = 0;
+                min_adc = 0x0fff;  // reset the min/max for p-p; min_adc should be set to 12-bit max!
+                max_adc = 0x0000; // not a bug; max_adc should be set to 0!
+                acmeas_pp_result = 0;
+                acmeas_dclevel_result = 0;
+                acmeas_freq_result = 0;
+                acmeas_state = ACMEAS_STATE_RUNNING;
+                // start the timer to begin sampling
+                DL_TimerG_startCounter(TIMER_ACMEAS_INST);
+            }
         }
     }
 }
 
+// this is called when the master reads from the I2C target
 void ad7291_i2c_tx_callback(void)
 {
     uint8_t channel;
     uint16_t virtualValue;
+
+    if (ad7291_regFilePtr == ACMEAS_RESULT_REG)
+    {
+        if (acmeas_state != ACMEAS_STATE_DONE)
+        {
+            // if we are not done, return 0 for all results
+            //for (int i=0; i<8; i++) {
+            //    I2CTarDriver_write(ad7291_i2c_tar_driver_handle, 0);
+            //}
+
+            // debug, return the state of the acmeas_state variable and
+            // the sample count
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, acmeas_state);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, 0);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, sample_count >> 8);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, sample_count & 0xFF);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, 0);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, 0);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, 0);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, 0);
+
+            return;
+        } else {
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, acmeas_rms_result >> 8);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, acmeas_rms_result & 0xFF);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, acmeas_pp_result >> 8);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, acmeas_pp_result & 0xFF);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, acmeas_dclevel_result >> 8);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, acmeas_dclevel_result & 0xFF);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, acmeas_freq_result >> 8);
+            I2CTarDriver_write(ad7291_i2c_tar_driver_handle, acmeas_freq_result & 0xFF);
+            acmeas_state = ACMEAS_STATE_IDLE;
+            return;
+        }
+    }
 
     if (ad7291_regFilePtr == VREG_PERIOD_COUNTS)
     {

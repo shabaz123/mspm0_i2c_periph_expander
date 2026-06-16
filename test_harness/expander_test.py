@@ -1,9 +1,19 @@
 # Test harness for an I2C to UART expander, using the Pi Pico I2C EasyAdapter
 # Setup: PC --> USB Cable --> Pi Pico (running EasyAdapter firmware) --> I2C to UART expander
 
+import argparse
 import easyadapter as ea
 import os
+import sys
 import time # Import time for delays/polling
+
+try:
+    import serial
+except ImportError:
+    serial = None
+
+
+run_all_test = True  # Set to False to run only test101 in a loop for debugging
 
 # --- Globals ---
 # Emulates an SC16IS740 I2C to UART expander (approximately)
@@ -27,13 +37,66 @@ ADC_COMMAND_REG = 0x00
 ADC_RESULT_REG = 0x01
 CAPTURE_PERIOD_REG = 0x40
 CAPTURE_DUTY_X10_REG = 0x41
+ACMEAS_START_REG = 0x50
+ACMEAS_RESULT_REG = 0x51
 
 ADC_SUPPLY_VOLTAGE = 3.3  # ADC reference voltage for converting raw values to volts
 CAPTURE_CLOCK_HZ = 4_000_000  # 32 MHz / 8 (prescaler) = 4 MHz
 
 DO_MANUAL_485_ENABLE = False  # Set to True if you want to manually control the RS485 transmit enable pin in the tests
 
+# colors and reset for terminal output
+BLACK   = "\033[30m"
+RED     = "\033[31m"
+GREEN   = "\033[32m"
+YELLOW  = "\033[33m"
+BLUE    = "\033[34m"
+MAGENTA = "\033[35m"
+CYAN    = "\033[36m"
+WHITE   = "\033[37m"
+BRIGHT_BLUE = "\033[94m"
+BRIGHT_GREEN = "\033[92m"
+BRIGHT_YELLOW = "\033[93m"
+BRIGHT_CYAN = "\033[96m"
+RESET   = "\033[0m"
+
 adapter = ea.EasyAdapter()
+uart_test_serial = None
+
+total_tests = 0
+successful_tests = 0
+
+def prompt_if_manual(message):
+    """Only pause for user input when the automated UART test port is not in use."""
+    if uart_test_serial is None:
+        input(message)
+    else:
+        print(f"{message} [auto UART mode: continuing]")
+
+def uart_test_read(expected, timeout=3):
+    """Read expected bytes from the PC UART adapter and compare them."""
+    if uart_test_serial is None:
+        return None
+    expected_bytes = expected.encode() if isinstance(expected, str) else bytes(expected)
+    deadline = time.time() + timeout
+    received = bytearray()
+    while len(received) < len(expected_bytes) and time.time() < deadline:
+        chunk = uart_test_serial.read(len(expected_bytes) - len(received))
+        if chunk:
+            received.extend(chunk)
+    print(f"UART monitor expected: {expected_bytes!r}, received: {bytes(received)!r}")
+    return bytes(received) == expected_bytes
+
+def uart_test_write(data, settle_time=0.1):
+    """Write bytes/string from the PC UART adapter to the DUT UART input."""
+    if uart_test_serial is None:
+        return
+    data_bytes = data.encode() if isinstance(data, str) else bytes(data)
+    print(f"UART injector writing: {data_bytes!r}")
+    uart_test_serial.write(data_bytes)
+    uart_test_serial.flush()
+    time.sleep(settle_time)
+
 # --- Timer Capture Functions ---
 def capture_period():
     """
@@ -99,6 +162,39 @@ def adc_read_all_channels():
                 channel_values[channel_num] = adc_value
 
     return channel_values
+
+
+def acmeas_start():
+    """Start an AC measurement run on ADC channel 0."""
+    global adapter
+    adapter.i2c_write(EXPANDER_I2C_ADC_ADDRESS, ACMEAS_START_REG, [])
+
+
+def acmeas_read_results():
+    """
+    Read AC measurement results.
+
+    Firmware returns 8 bytes:
+      RMS counts, peak-to-peak counts, DC level, frequency Hz
+    all as big-endian uint16 values.
+    """
+    global adapter
+    adapter.i2c_write(EXPANDER_I2C_ADC_ADDRESS, ACMEAS_RESULT_REG, [])
+    data = adapter.i2c_read(EXPANDER_I2C_ADC_ADDRESS, 8)
+
+    if data is None or len(data) != 8:
+        print("Failed to read ACMEAS_RESULT_REG!")
+        return None
+
+    rms_counts = (data[0] << 8) | data[1]
+    pp_counts = (data[2] << 8) | data[3]
+    dc_level = (data[4] << 8) | data[5]
+    freq_hz = (data[6] << 8) | data[7]
+
+    # debug, print in hex each byte
+    print(f"ACMEAS_RESULT_REG raw bytes: {[f'0x{b:02X}' for b in data]}")
+
+    return rms_counts, pp_counts, dc_level, freq_hz
 
 
 # --- RS485 / UART Functions ---
@@ -232,9 +328,11 @@ def test1():
     Test 1: Basic RS485 Write Test
     - Write the sequence to send a set of bytes over RS485
     """
-    global adapter
+    global adapter, uart_test_serial
     test_status = False
-    input("Press Enter to start Test 1: Basic Write Test")
+    prompt_if_manual("Press Enter to start Test 1: Basic Write Test")
+    if uart_test_serial is not None:
+        uart_test_serial.reset_input_buffer()
     # Example byte sequence to write (replace with actual data for your expander)
     data_to_write = [0x31, 0x32, 0x33, 0x34]  # ASCII for '1234'
     if DO_MANUAL_485_ENABLE:
@@ -245,13 +343,17 @@ def test1():
     print("Waiting for transmission to complete...")
     if rs485_wait_tx_complete():
         print("Transmission completed successfully.")
-        test_status = True
+        if uart_test_serial is not None:
+            test_status = uart_test_read("1234", timeout=3)
+        else:
+            test_status = True
     else:
         print("Transmission did not complete within the timeout period.")
     if DO_MANUAL_485_ENABLE:
         print("Disabling RS485 transmit mode...")
         disable_rs485_transmit()
-    print(f"Test 1 Result: {'PASS (But check the UART output to confirm!)' if test_status else 'FAIL'}")
+    print(f"Test 1 Result: {'PASS' if test_status else 'FAIL'}")
+    return test_status
 
 def test2():
     """
@@ -259,9 +361,11 @@ def test2():
     - This test will wait for data to be received on the RS485 line and read it back.
     - It will print the received data in hex format.
     """
-    global adapter
+    global adapter, uart_test_serial
     test_status = False
-    input("Press Enter to start Test 2: Basic Read Test")
+    prompt_if_manual("Press Enter to start Test 2: Basic Read Test")
+    rs485_flush()
+    uart_test_write("hello")
     print("Waiting for data to be received on RS485...")
     received_data = rs485_read(maxcount=8, first_timeout=5, subsequent_timeout=1)
     if received_data:
@@ -273,23 +377,39 @@ def test2():
         test_status = True
     else:
         print("No data received within the timeout period.")
-    print(f"Test 2 Result: {'PASS (But check the UART output to confirm!)' if test_status else 'FAIL'}")
-
+    print(f"Test 2 Result: {'PASS' if test_status else 'FAIL'}")
+    return test_status
+    
 def test3():
     """
     Test 3: RS485 Flush Test
     - This test will flush the UART receive buffer and then attempt to read data, which should not be present.
     """
-    global adapter
+    global adapter, uart_test_serial
     test_status = False
-    input("Press Enter to start Test 3: RS485 Flush Test")
-    input("Type some characters via the UART, then press Enter")
+    prompt_if_manual("Press Enter to start Test 3: RS485 Flush Test")
+    if uart_test_serial is None:
+        input("Type some characters via the UART, then press Enter")
+    else:
+        uart_test_write("boo")
     print("Reading just one character to confirm data is present before flush...")
     pre_flush_data = rs485_read(maxcount=1, first_timeout=1, subsequent_timeout=1)
+    if uart_test_serial is not None:
+        if pre_flush_data:
+            if pre_flush_data == [ord('b')]:
+                print(f"Received expected data {pre_flush_data} before flush.")
+            else:
+                print(f"Received unexpected data {pre_flush_data} before flush.")
+        else:
+            print("No data received before flush, which is unexpected.")
+            # flush and abort the test since we cannot confirm the flush behavior
+            rs485_flush()
+            print(f"Test 3 Result: FAIL (no data to flush)")
+            return test_status
     print("Flushing the UART receive buffer...")
     rs485_flush()
     print("Attempting to read data after flush (should be none)...")
-    received_data = rs485_read(maxcount=8, first_timeout=2, subsequent_timeout=1)
+    received_data = rs485_read(maxcount=8, first_timeout=1, subsequent_timeout=1)
     if not received_data:
         print("No data received after flush, as expected.")
         test_status = True
@@ -299,6 +419,7 @@ def test3():
             ascii_char = chr(byte) if 32 <= byte <= 126 else '.'  # Printable ASCII range
             print(f"0x{byte:02X} ({ascii_char})")
     print(f"Test 3 Result: {'PASS' if test_status else 'FAIL'}")
+    return test_status
 
 def test100():
     """
@@ -307,7 +428,7 @@ def test100():
     """
     global adapter
     test_status = False
-    input("Press Enter to start Test 100: ADC Read Test")
+    prompt_if_manual("Press Enter to start Test 100: ADC Read Test")
     print("Enabling ADC channels...")
     adc_enable_all_channels()
     print("Reading ADC values for channels 0-2...")
@@ -315,7 +436,19 @@ def test100():
     if all(value is not None for value in channel_values):
         for i, value in enumerate(channel_values):
             print(f"Channel {i}: {value} (approximately {(value / 4095) * ADC_SUPPLY_VOLTAGE:.2f} V)")
-        test_status = True
+        # expected values (+- 2%) are: 1024, 2048, 3072 for channels 0, 1, 2 respectively
+        expected_values = [1024, 2048, 3072]
+        tolerance = 0.02  # 2% tolerance
+        # display the error and check if within tolerance
+        for i, (value, expected) in enumerate(zip(channel_values, expected_values)):
+            error = abs(value - expected) / expected
+            print(f"Channel {i}: Value = {value}, Expected = {expected}, Error = {error:.2%}")
+            if error > tolerance:
+                print(f"Channel {i} value is out of tolerance!")
+                test_status = False
+                break
+        else:
+            test_status = True
     else:
         print("Failed to read all ADC channel values.")
         # Print which channels were read successfully
@@ -325,6 +458,51 @@ def test100():
             else:
                 print(f"Channel {i}: Failed to read value")
     print(f"Test 100 Result: {'PASS' if test_status else 'FAIL'}")
+    return test_status
+
+
+def test101():
+    """
+    Test 101: AC Measurement Test
+    - Issues ACMEAS_START_REG to start a channel-3 AC measurement.
+    - Waits 1.5 seconds for the firmware to collect samples.
+    - Reads ACMEAS_RESULT_REG and prints RMS, p-p, DC level, and frequency.
+    """
+    global adapter
+    test_status = False
+    prompt_if_manual("Press Enter to start Test 101: AC Measurement Test")
+
+    print("Starting AC meas on ADC ch 3...", end="", flush=True)
+    acmeas_start()
+
+    print("Wait 1.5 sec to complete...", end="", flush=True)
+    time.sleep(1.5)
+    print("done.")
+
+    result = acmeas_read_results()
+
+    if result is None:
+        print("Failed to read AC measurement results.")
+    else:
+        rms_counts, pp_counts, dc_level, freq_hz = result
+        rms_volts = (rms_counts / 4095) * ADC_SUPPLY_VOLTAGE
+        pp_volts = (pp_counts / 4095) * ADC_SUPPLY_VOLTAGE
+        dc_level_volts = (dc_level / 4095) * ADC_SUPPLY_VOLTAGE
+        print(f"{RED}AC RMS: [{rms_counts}] {rms_volts:.2f}V", end=", ")
+        print(f"{GREEN}p-p: [{pp_counts}] {pp_volts:.2f}V", end=", ")
+        print(f"{BLUE}Offset:  {dc_level} {dc_level_volts:.2f}V", end=", ")
+        print(f"{MAGENTA}Freq: {freq_hz} Hz{RESET}")
+
+        # Treat an all-zero response as not-ready/fail, matching the firmware behavior.
+        if rms_counts == 0 and pp_counts == 0 and dc_level == 0 and freq_hz == 0:
+            print("AC measurement returned all zeros; measurement may not be complete or no valid signal was detected.")
+            test_status = False
+        else:
+            test_status = True
+
+    print(f"Test 101 Result: {'PASS' if test_status else 'FAIL'}")
+    return test_status
+
 
 def test200():
     """
@@ -337,7 +515,7 @@ def test200():
     test_length = 2  # seconds
     print("For Test 200, connect a signal generator to the expander's timer input pin.")
     print(f"This test will run for {test_length} seconds.")
-    input("Press Enter to start Test 200: Timer Capture Test")
+    prompt_if_manual("Press Enter to start Test 200: Timer Capture Test")
     start_time = time.time()
     while time.time() - start_time < test_length:
         period = capture_period()
@@ -357,14 +535,64 @@ def test200():
                 print(f"Frequency: {frequency_khz:.3f} kHz, Period: {period:.6f} ms, Duty Cycle: {duty_cycle:.1f}%")
         time.sleep(0.1)  # Capture every 100ms
     print(f"Test 200 Result: {'PASS' if test_status else 'FAIL'}")
+    return test_status
 
 # --- main function ---
+def parse_args():
+    parser = argparse.ArgumentParser(description="Test harness for an I2C to UART expander")
+    parser.add_argument(
+        "legacy_uart_test_port",
+        nargs="*",
+        help="Optional legacy form: uart_test_port COM3",
+    )
+    parser.add_argument(
+        "--uart-test-port",
+        dest="uart_test_port",
+        help="PC serial port connected to the DUT UART, for example COM3 or /dev/ttyUSB0",
+    )
+    parser.add_argument(
+        "--uart-test-baud",
+        type=int,
+        default=115200,
+        help="Baud rate for the PC UART adapter. Default: 115200",
+    )
+    args = parser.parse_args()
+
+    # Also accept the suggested command style: python expander_test.py uart_test_port COM3
+    if args.legacy_uart_test_port:
+        if len(args.legacy_uart_test_port) == 2 and args.legacy_uart_test_port[0] == "uart_test_port":
+            args.uart_test_port = args.legacy_uart_test_port[1]
+        else:
+            parser.error("Use either --uart-test-port COM3 or uart_test_port COM3")
+
+    return args
+
+def open_uart_test_port(port, baud):
+    if not port:
+        return None
+    if serial is None:
+        raise RuntimeError("pyserial is not installed. Install it with: pip install pyserial")
+    ser = serial.Serial(port=port, baudrate=baud, timeout=0.05, write_timeout=1)
+    ser.reset_input_buffer()
+    ser.reset_output_buffer()
+    print(f"Opened UART test port {port} at {baud} baud.")
+    return ser
+
 def main():
     """
     Main function to read .hex files from the input directory,
     identify devices, and write data to them via EasyAdapter using page writes.
     """
-    global adapter
+    global adapter, uart_test_serial, total_tests, successful_tests
+    total_tests = 0
+    successful_tests = 0
+    args = parse_args()
+    try:
+        uart_test_serial = open_uart_test_port(args.uart_test_port, args.uart_test_baud)
+    except Exception as exc:
+        print(f"Failed to open UART test port: {exc}")
+        return
+
     print("Initializing EasyAdapter...")
     init_result = adapter.init(0) 
     if init_result:
@@ -380,16 +608,46 @@ def main():
     # set 115200 baud for RS485 communication
     print("Setting RS485 baud rate to 115200...")
     rs485_set_baud(115200)
-    # Run Test 200: Timer Capture Test
-    test200()
-    # Run Test 100: ADC Read Test
-    test100()
-    # Run Test 1: Basic RS485 Write Test
-    test1() 
-    # Run Test 2: Basic RS485 Read Test
-    test2()
-    # Run Test 3: RS485 Flush Test
-    test3()
+    if run_all_test:
+        # Run Test 200: Timer Capture Test
+        if test200():
+            successful_tests += 1
+        total_tests += 1
+        # Run Test 101: AC Measurement Test
+        if test101():
+            successful_tests += 1
+        total_tests += 1
+        # Run Test 100: ADC Read Test
+        if test100():
+            successful_tests += 1
+        total_tests += 1
+        # Run Test 1: Basic RS485 Write Test
+        if test1():
+            successful_tests += 1
+        total_tests += 1
+        # Run Test 2: Basic RS485 Read Test
+        if test2():
+            successful_tests += 1
+        total_tests += 1
+        # Run Test 3: RS485 Flush Test
+        if test3():
+            successful_tests += 1
+        total_tests += 1
+    else:
+        for i in range(0,3):
+            if test101():
+                successful_tests += 1
+            total_tests += 1
+
+    if uart_test_serial is not None:
+        uart_test_serial.close()
+        uart_test_serial = None
+
+    print(f"Total Tests: {total_tests}, Successful Tests: {successful_tests}")
+    if successful_tests == total_tests:
+        print("All tests passed successfully.")
+    else:
+        print(f"*** ERROR - {total_tests - successful_tests} TESTS FAILED ***")
 
 if __name__ == "__main__":
     main()

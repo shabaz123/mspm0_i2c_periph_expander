@@ -100,6 +100,12 @@ extern "C" {
 #define WAKEUP_TIMER_INST_IRQHandler                            TIMG0_IRQHandler
 #define WAKEUP_TIMER_INST_INT_IRQN                              (TIMG0_INT_IRQn)
 #define WAKEUP_TIMER_INST_LOAD_VALUE                                    (16383U)
+/* Defines for TIMER_ACMEAS */
+#define TIMER_ACMEAS_INST                                                (TIMG1)
+#define TIMER_ACMEAS_INST_IRQHandler                            TIMG1_IRQHandler
+#define TIMER_ACMEAS_INST_INT_IRQN                              (TIMG1_INT_IRQn)
+#define TIMER_ACMEAS_INST_LOAD_VALUE                                     (3999U)
+#define TIMER_ACMEAS_INST_PUB_0_CH                                           (1)
 
 
 
@@ -155,6 +161,10 @@ extern "C" {
 #define ADC0_ADCMEM_2                                         DL_ADC12_MEM_IDX_2
 #define ADC0_ADCMEM_2_REF                        DL_ADC12_REFERENCE_VOLTAGE_VDDA
 #define ADC0_ADCMEM_2_REF_VOLTAGE_V                                          3.3
+#define ADC0_ADCMEM_3                                         DL_ADC12_MEM_IDX_3
+#define ADC0_ADCMEM_3_REF                        DL_ADC12_REFERENCE_VOLTAGE_VDDA
+#define ADC0_ADCMEM_3_REF_VOLTAGE_V                                          3.3
+#define ADC0_INST_SUB_CH                                                     (1)
 #define GPIO_ADC0_C0_PORT                                                  GPIOA
 #define GPIO_ADC0_C0_PIN                                          DL_GPIO_PIN_27
 #define GPIO_ADC0_IOMUX_C0                                       (IOMUX_PINCM28)
@@ -167,6 +177,10 @@ extern "C" {
 #define GPIO_ADC0_C2_PIN                                          DL_GPIO_PIN_25
 #define GPIO_ADC0_IOMUX_C2                                       (IOMUX_PINCM26)
 #define GPIO_ADC0_IOMUX_C2_FUNC                   (IOMUX_PINCM26_PF_UNCONNECTED)
+#define GPIO_ADC0_C3_PORT                                                  GPIOA
+#define GPIO_ADC0_C3_PIN                                          DL_GPIO_PIN_24
+#define GPIO_ADC0_IOMUX_C3                                       (IOMUX_PINCM25)
+#define GPIO_ADC0_IOMUX_C3_FUNC                   (IOMUX_PINCM25_PF_UNCONNECTED)
 
 
 
@@ -207,6 +221,7 @@ void SYSCFG_DL_GPIO_init(void);
 void SYSCFG_DL_SYSCTL_init(void);
 void SYSCFG_DL_CAPTURE_0_init(void);
 void SYSCFG_DL_WAKEUP_TIMER_init(void);
+void SYSCFG_DL_TIMER_ACMEAS_init(void);
 void SYSCFG_DL_TAR_I2C_init(void);
 void SYSCFG_DL_UART_0_init(void);
 void SYSCFG_DL_ADC0_init(void);
