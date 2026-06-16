@@ -23,6 +23,7 @@ const I2C1     = I2C.addInstance();
 const SYSCTL   = scripting.addModule("/ti/driverlib/SYSCTL");
 const TIMER    = scripting.addModule("/ti/driverlib/TIMER", {}, false);
 const TIMER1   = TIMER.addInstance();
+const TIMER2   = TIMER.addInstance();
 const UART     = scripting.addModule("/ti/driverlib/UART", {}, false);
 const UART1    = UART.addInstance();
 const WWDT     = scripting.addModule("/ti/driverlib/WWDT", {}, false);
@@ -32,24 +33,29 @@ const WWDT1    = WWDT.addInstance();
  * Write custom configuration values to the imported modules.
  */
 ADC121.$name                             = "ADC0";
-ADC121.sampleTime0                       = "0.005 ms";
 ADC121.samplingOperationMode             = "sequence";
-ADC121.endAdd                            = 2;
 ADC121.adcMem1chansel                    = "DL_ADC12_INPUT_CHAN_1";
 ADC121.adcMem2chansel                    = "DL_ADC12_INPUT_CHAN_2";
-ADC121.enabledInterrupts                 = ["DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED","DL_ADC12_INTERRUPT_MEM1_RESULT_LOADED","DL_ADC12_INTERRUPT_MEM2_RESULT_LOADED"];
 ADC121.adcMem2trig                       = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
+ADC121.endAdd                            = 3;
+ADC121.adcMem3chansel                    = "DL_ADC12_INPUT_CHAN_3";
+ADC121.sampleTime0                       = "0.001 ms";
+ADC121.enabledInterrupts                 = ["DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED","DL_ADC12_INTERRUPT_MEM1_RESULT_LOADED","DL_ADC12_INTERRUPT_MEM2_RESULT_LOADED","DL_ADC12_INTERRUPT_MEM3_RESULT_LOADED"];
+ADC121.subChanID                         = 1;
+ADC121.adcMem3trig                       = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
 ADC121.adcPin0Config.hideOutputInversion = scripting.forceWrite(false);
 ADC121.adcPin0Config.$name               = "ti_driverlib_gpio_GPIOPinGeneric4";
 ADC121.adcPin0Config.enableConfig        = true;
 ADC121.adcPin1Config.$name               = "ti_driverlib_gpio_GPIOPinGeneric5";
 ADC121.adcPin1Config.enableConfig        = true;
+ADC121.adcPin2Config.$name               = "ti_driverlib_gpio_GPIOPinGeneric6";
+ADC121.adcPin2Config.enableConfig        = true;
 ADC121.peripheral.$assign                = "ADC0";
 ADC121.peripheral.adcPin0.$assign        = "PA27";
 ADC121.peripheral.adcPin1.$assign        = "PA26";
 ADC121.peripheral.adcPin2.$assign        = "PA25";
-ADC121.adcPin2Config.$name               = "ti_driverlib_gpio_GPIOPinGeneric6";
-ADC121.adcPin2Config.enableConfig        = true;
+ADC121.peripheral.adcPin3.$assign        = "PA24/OPA0.IN0-";
+ADC121.adcPin3Config.$name               = "ti_driverlib_gpio_GPIOPinGeneric8";
 
 
 CAPTURE1.$name                          = "CAPTURE_0";
@@ -123,6 +129,14 @@ TIMER1.timerPeriod        = "500 ms";
 TIMER1.timerStartTimer    = true;
 TIMER1.interrupts         = ["ZERO"];
 TIMER1.peripheral.$assign = "TIMG0";
+
+TIMER2.timerClkDiv                 = 2;
+TIMER2.timerMode                   = "PERIODIC";
+TIMER2.timerPeriod                 = "250us";
+TIMER2.event1PublisherChannel      = 1;
+TIMER2.event1ControllerInterruptEn = ["ZERO_EVENT"];
+TIMER2.$name                       = "TIMER_ACMEAS";
+TIMER2.peripheral.$assign          = "TIMG1";
 
 UART1.$name                    = "UART_0";
 UART1.peripheral.rxPin.$assign = "PA9";

@@ -32,6 +32,28 @@
 #define CAPTURE_STALE_TICKS 2   // about 1 second
 #endif
 
+#define ACMEAS_STATE_IDLE 0x00
+#define ACMEAS_STATE_RUNNING 0x01
+#define ACMEAS_STATE_DONE 0x02
+#define ACMEAS_MAX_SAMPLE_COUNT 4000
+#define ACMEAS_SAMPLE_RATE_HZ 4000U
+#define ADC_MID 2048
+#define ACMEAS_FCALC_AMP_THRESH     128   // requires about 256 counts p-p minimum
+#define ACMEAS_FCALC_POS_THRESH     (ADC_MID + ACMEAS_FCALC_AMP_THRESH)   // 2176
+#define ACMEAS_FCALC_NEG_THRESH     (ADC_MID - ACMEAS_FCALC_AMP_THRESH)   // 1920
+typedef enum {
+    WAIT_FOR_NEGATIVE,
+    WAIT_FOR_POSITIVE
+} freq_state_t;
+
+typedef struct {
+    freq_state_t state;
+    uint32_t sample_index;
+    uint32_t last_pos_crossing;
+    uint32_t period_samples;
+    uint8_t  valid;
+} freq_counter_t;
+
 extern void ad7291_open(i2c_tar_driver_t *pI2CTarDriverInst);
 
 /**
