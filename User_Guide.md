@@ -8,7 +8,7 @@ The device responds to two distinct 7-bit I2C base addresses. The actual address
 
 | Feature Group | Base Address (A1=0, A0=0) | Address Range |
 | :--- | :--- | :--- |
-| **UART Emulation** | `0x48` | `0x48` - `0x4B` |
+| **UART Emulation** | `0x48` | `0x48` - `0x4b` |
 | **ADC / AC RMS / PWM Capture** | `0x20` | `0x20` - `0x23` |
 
 The 7-bit address is calculated as: `Base Address + (A1 << 1) | A0`.
