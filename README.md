@@ -9,6 +9,10 @@ UART Emulation feature: 0x48
 All other peripherals: 0x20
 The actual I2C addresses can be modified, by setting A0 and A1 address pins. Thus, I2C addresses within the range 0x48-0x4b and 0x20-0x23 are feasible. This allows up to 4 devices to be attached to the same I2C bus.
 
+Detailed information on the specific I2C registers can be found in the [User Guide](User_Guide.md).
+
+To see examples of the I2C registers being used, see the Python test harness code.
+
 ## Features
 
 - **I2C UART Emulation**: Loosely based on **16550** and **SC16IS740** UART peripherals.
