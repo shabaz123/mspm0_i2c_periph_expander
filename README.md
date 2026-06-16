@@ -17,14 +17,10 @@ To see examples of the I2C registers being used, see the Python test harness cod
 
 - **I2C UART Emulation**: Loosely based on **16550** and **SC16IS740** UART peripherals.
   - Additionally, usable for **RS-485** communication with hardware direction control.
-  - **I2C Base Address (A1:0 = 00)**: `0x48`.
   - **Baud Rate**: Pre-configured to 9600, adjustable with a register setting.
 - **I2C ADC Emulation**: Loosely based on **AD7291** 12-bit ADC, with 3 channels available.
-  - **I2C Base Address (A1:0 = 00)**: `0x20`.
 - **AC RMS Measurement**: AC RMS, Peak-to-Peak, DC level and Frequency measurement analog input.
-  - **I2C Base Address (A1:0 = 00)**: `0x20`
 - **PWM/Frequency Capture**: Period (1/Freq) and Duty Cycle measurement digital input.
-  - **I2C Base Address (A1:0 = 00)**: `0x20`
 
 ## Hardware Mapping (Physical package is TI 28-pin DGS)
 
