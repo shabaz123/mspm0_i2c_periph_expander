@@ -110,8 +110,8 @@ This peripheral provides analog measurements and digital signal capture.
 
 #### ACMEAS_RESULT (0x51)
 - **Read**: Returns 8 bytes (Big Endian) of measurement data.
-  - **Bytes 0-1**: RMS counts (12-bit scale).
-  - **Bytes 2-3**: Peak-to-Peak counts (12-bit scale).
-  - **Bytes 4-5**: DC Level counts (12-bit scale).
+  - **Bytes 0-1**: RMS counts (14-bit scale).
+  - **Bytes 2-3**: Peak-to-Peak counts (14-bit scale).
+  - **Bytes 4-5**: DC Level counts (14-bit scale).
   - **Bytes 6-7**: Frequency in Hz.
-  - *Note: All counts should be converted using the same 12-bit ADC formula as regular channels.*
+  - *Note: all ACMEAS counts are 14-bit (0-16383) resolution, unlike the ADC_RESULT channels which are 12-bit.*
