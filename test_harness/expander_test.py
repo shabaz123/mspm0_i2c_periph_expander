@@ -13,7 +13,7 @@ except ImportError:
     serial = None
 
 
-run_all_test = True  # Set to False to run only test101 in a loop for debugging
+run_all_test = False  # Set to False to run only test101 in a loop for debugging
 
 # --- Globals ---
 # Emulates an SC16IS740 I2C to UART expander (approximately)
@@ -59,6 +59,8 @@ BRIGHT_GREEN = "\033[92m"
 BRIGHT_YELLOW = "\033[93m"
 BRIGHT_CYAN = "\033[96m"
 RESET   = "\033[0m"
+
+RMS_PP_CONV = 0.35355339   # 1 / sqrt(2) / 2, used to convert RMS to peak-to-peak for a sine wave
 
 adapter = ea.EasyAdapter()
 uart_test_serial = None
@@ -485,12 +487,14 @@ def test101():
         print("Failed to read AC measurement results.")
     else:
         rms_counts, pp_counts, dc_level, freq_hz = result
-        rms_volts = (rms_counts / 4095) * ADC_SUPPLY_VOLTAGE
-        pp_volts = (pp_counts / 4095) * ADC_SUPPLY_VOLTAGE
-        dc_level_volts = (dc_level / 4095) * ADC_SUPPLY_VOLTAGE
-        print(f"{RED}AC RMS: [{rms_counts}] {rms_volts:.3f}V", end=", ")
+        rms_volts = (rms_counts / 16384) * ADC_SUPPLY_VOLTAGE
+        derived_vpp_volts = rms_volts / RMS_PP_CONV  # Convert RMS to peak-to-peak for a sine wave
+        pp_volts = (pp_counts / 16384) * ADC_SUPPLY_VOLTAGE
+        dc_level_volts = (dc_level / 16384) * ADC_SUPPLY_VOLTAGE
+        # print(f"{RED}AC RMS: [{rms_counts}] {rms_volts:.3f}V", end=", ")
+        print(f"{YELLOW}AC mV RMS: [{rms_counts}] {rms_volts*1000:.1f} mV (sine {derived_vpp_volts*1000:.1f} mVp-p)", end=", ")
         print(f"{GREEN}p-p: [{pp_counts}] {pp_volts:.3f}V", end=", ")
-        print(f"{BLUE}Offset:  {dc_level} {dc_level_volts:.3f}V", end=", ")
+        print(f"{BLUE}Offset:  [{dc_level}] {dc_level_volts:.3f}V", end=", ")
         print(f"{MAGENTA}Freq: {freq_hz} Hz{RESET}")
 
         # Treat an all-zero response as not-ready/fail, matching the firmware behavior.
