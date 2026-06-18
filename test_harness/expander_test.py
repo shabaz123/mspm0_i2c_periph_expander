@@ -13,7 +13,7 @@ except ImportError:
     serial = None
 
 
-run_all_test = False  # Set to False to run only test101 in a loop for debugging
+run_all_test = True  # Set to False to run only test101 in a loop for debugging
 
 # --- Globals ---
 # Emulates an SC16IS740 I2C to UART expander (approximately)
