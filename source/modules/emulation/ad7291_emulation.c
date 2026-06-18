@@ -94,6 +94,7 @@ extern volatile uint16_t min_adc;       // for p-p
 extern volatile uint16_t max_adc;
 extern freq_counter_t freq_counter;
 extern volatile bool adc_restore_pending;
+uint32_t  dc_level;     // estimated or fixed midpoint, e.g. 2048
 
 /**
  * @brief   AD7291 emulated register file storage
@@ -220,6 +221,24 @@ static void adc_config_software_trigger(void)
         DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
 
     DL_ADC12_enableConversions(ADC0_INST);
+}
+
+// acmeas frequency measurement related
+void freq_start(freq_counter_t *f, uint16_t dc)
+{
+    f->sample_index = 0;
+    f->last_pos_crossing = 0;
+    f->period_samples = 0;
+    f->valid = 0;
+    f->state = WAIT_FOR_NEGATIVE;
+
+    f->dc = dc;
+    f->hyst = FREQ_HYST_MIN_COUNTS;
+
+    f->period_sum = 0;
+    f->period_count = 0;
+    f->below_count = 0;
+    f->above_count = 0;
 }
 
 
@@ -404,6 +423,7 @@ void ad7291_i2c_rx_callback(uint32_t bytes, i2c_tar_driver_call_trig_t trig)
                 //NVIC_ClearPendingIRQ(TIMER_ACMEAS_INST_INT_IRQN);
                 //NVIC_EnableIRQ(TIMER_ACMEAS_INST_INT_IRQN);
 
+                freq_start(&freq_counter, dc_level);
                 freq_counter.state = WAIT_FOR_NEGATIVE;
                 freq_counter.sample_index = 0;
                 freq_counter.last_pos_crossing = 0;

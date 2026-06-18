@@ -1,5 +1,6 @@
 // system.c
 
+#include <math.h>
 #include "ti_msp_dl_config.h"
 #include "communication/i2c_tar_driver.h"
 #include "emulation/sc16is740_emulation.h"
@@ -66,7 +67,6 @@ volatile uint16_t acmeas_dclevel_result;
 volatile uint64_t sum_sq_adc;        // RMS accumulator
 volatile uint32_t sum_adc;       // DC offset accumulator
 volatile uint32_t sample_count;  // number of samples
-uint32_t  dc_level;     // estimated or fixed midpoint, e.g. 2048
 int32_t  x;             // centred ADC sample
 uint16_t min_adc;       // for p-p
 uint16_t max_adc;
@@ -74,6 +74,7 @@ uint16_t pp_counts;
 uint32_t rms_counts;
 freq_counter_t freq_counter;
 volatile bool adc_restore_pending;
+extern uint32_t  dc_level;
 
 // Wake-timer based stale detection: no capture for ~1 second => invalid
 volatile uint32_t wakeTicks;
@@ -302,27 +303,6 @@ void CAPTURE_0_INST_IRQHandler(void)
 
 // ****  acmeas  ****
 
-// this function is used when acmeas completes, to go back to the normal AD7291 emulation mode
-#ifdef OLD_CODE
-static void adc_config_software_trigger(void)
-{
-    DL_ADC12_disableConversions(ADC0_INST);
-
-    DL_ADC12_initSeqSample(ADC0_INST,
-        DL_ADC12_REPEAT_MODE_DISABLED,
-        DL_ADC12_SAMPLING_SOURCE_AUTO,
-        DL_ADC12_TRIG_SRC_SOFTWARE,
-        DL_ADC12_SEQ_START_ADDR_00,
-        DL_ADC12_SEQ_END_ADDR_03,
-        DL_ADC12_SAMP_CONV_RES_12_BIT,
-        DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
-
-    DL_ADC12_enableConversions(ADC0_INST);
-}
-#endif
-
-
-
 // add_acmeas_sample contains the accumulators so that DC offset and AC RMS can be calculated 
 void add_acmeas_sample(uint16_t adc)
 {
@@ -334,26 +314,48 @@ void add_acmeas_sample(uint16_t adc)
     if (adc > max_adc) max_adc = adc;
 }
 
+// acmeas frequency measurement detector, called for each new ADC sample
 void freq_add_sample(freq_counter_t *f, uint16_t adc)
 {
     f->sample_index++;
 
+    uint16_t pos_thresh = f->dc + f->hyst;
+    uint16_t neg_thresh = f->dc - f->hyst;
+
     switch (f->state) {
     case WAIT_FOR_NEGATIVE:
-        if (adc < ACMEAS_FCALC_NEG_THRESH) {
-            f->state = WAIT_FOR_POSITIVE;
+        if (adc < neg_thresh) {
+            if (++f->below_count >= FREQ_CROSS_CONFIRM_SAMPLES) {
+                f->below_count = 0;
+                f->state = WAIT_FOR_POSITIVE;
+            }
+        } else {
+            f->below_count = 0;
         }
         break;
 
     case WAIT_FOR_POSITIVE:
-        if (adc > ACMEAS_FCALC_POS_THRESH) {
-            if (f->last_pos_crossing != 0) {
-                f->period_samples = f->sample_index - f->last_pos_crossing;
-                f->valid = 1;
-            }
+        if (adc > pos_thresh) {
+            if (++f->above_count >= FREQ_CROSS_CONFIRM_SAMPLES) {
+                f->above_count = 0;
 
-            f->last_pos_crossing = f->sample_index;
-            f->state = WAIT_FOR_NEGATIVE;
+                if (f->last_pos_crossing != 0) {
+                    uint32_t p = f->sample_index - f->last_pos_crossing;
+
+                    if ((p >= FREQ_MIN_PERIOD_SAMPLES) &&
+                        (p <= FREQ_MAX_PERIOD_SAMPLES)) {
+                        f->period_sum += p;
+                        f->period_count++;
+                        f->period_samples = p;
+                        f->valid = 1;
+                    }
+                }
+
+                f->last_pos_crossing = f->sample_index;
+                f->state = WAIT_FOR_NEGATIVE;
+            }
+        } else {
+            f->above_count = 0;
         }
         break;
     }
@@ -384,17 +386,30 @@ void ADC0_INST_IRQHandler(void)
                     
                     // calculate results
                     uint32_t n = sample_count;
-                    dc_level = (uint32_t)((sum_adc + (n / 2)) / n);
-                    uint64_t mean_sq = sum_sq_adc / n;
-                    uint64_t dc_sq   = (uint64_t)dc_level * dc_level;
-                    uint64_t ac_var = (mean_sq > dc_sq) ? (mean_sq - dc_sq) : 0;
+                    uint64_t sum = sum_adc;
+                    uint64_t sumsq = sum_sq_adc;
 
-                    acmeas_rms_result = (uint16_t)sqrt((double)ac_var);
-                    acmeas_dclevel_result = (uint16_t)dc_level;
+                    /*
+                    * AC variance = (N * sum(x^2) - sum(x)^2) / N^2
+                    */
+                    uint64_t numerator = (uint64_t)n * sumsq - sum * sum;
+
+                    acmeas_rms_result =(uint16_t)(sqrt((double)numerator) / (double)n);
+                    acmeas_dclevel_result = (uint16_t)((sum + (n / 2)) / n);
+                    dc_level = acmeas_dclevel_result; // store it for use in freq_add_sample next time around
+
                     acmeas_pp_result = max_adc - min_adc;
 
-                    acmeas_freq_result =
-                        freq_counter.valid ? (ACMEAS_SAMPLE_RATE_HZ / freq_counter.period_samples) : 0;
+                    if ((acmeas_pp_result < FREQ_MIN_PP_COUNTS) ||
+                        (freq_counter.period_count == 0)) {
+                        acmeas_freq_result = 0;
+                    } else {
+                        acmeas_freq_result =
+                            (uint16_t)((ACMEAS_SAMPLE_RATE_HZ * freq_counter.period_count +
+                                    (freq_counter.period_sum / 2)) /
+                                    freq_counter.period_sum);
+                    }
+
                 }
             }
             break;

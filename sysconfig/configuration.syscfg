@@ -39,10 +39,10 @@ ADC121.adcMem2chansel                    = "DL_ADC12_INPUT_CHAN_2";
 ADC121.adcMem2trig                       = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
 ADC121.endAdd                            = 3;
 ADC121.adcMem3chansel                    = "DL_ADC12_INPUT_CHAN_3";
-ADC121.sampleTime0                       = "0.001 ms";
 ADC121.enabledInterrupts                 = ["DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED","DL_ADC12_INTERRUPT_MEM1_RESULT_LOADED","DL_ADC12_INTERRUPT_MEM2_RESULT_LOADED","DL_ADC12_INTERRUPT_MEM3_RESULT_LOADED"];
 ADC121.subChanID                         = 1;
 ADC121.adcMem3trig                       = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
+ADC121.sampleTime0                       = "0.001 ms";
 ADC121.adcPin0Config.hideOutputInversion = scripting.forceWrite(false);
 ADC121.adcPin0Config.$name               = "ti_driverlib_gpio_GPIOPinGeneric4";
 ADC121.adcPin0Config.enableConfig        = true;
@@ -132,10 +132,10 @@ TIMER1.peripheral.$assign = "TIMG0";
 
 TIMER2.timerClkDiv                 = 2;
 TIMER2.timerMode                   = "PERIODIC";
-TIMER2.timerPeriod                 = "250us";
 TIMER2.event1PublisherChannel      = 1;
 TIMER2.event1ControllerInterruptEn = ["ZERO_EVENT"];
 TIMER2.$name                       = "TIMER_ACMEAS";
+TIMER2.timerPeriod                 = "62.5us";
 TIMER2.peripheral.$assign          = "TIMG1";
 
 UART1.$name                    = "UART_0";

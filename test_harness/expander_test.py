@@ -488,9 +488,9 @@ def test101():
         rms_volts = (rms_counts / 4095) * ADC_SUPPLY_VOLTAGE
         pp_volts = (pp_counts / 4095) * ADC_SUPPLY_VOLTAGE
         dc_level_volts = (dc_level / 4095) * ADC_SUPPLY_VOLTAGE
-        print(f"{RED}AC RMS: [{rms_counts}] {rms_volts:.2f}V", end=", ")
-        print(f"{GREEN}p-p: [{pp_counts}] {pp_volts:.2f}V", end=", ")
-        print(f"{BLUE}Offset:  {dc_level} {dc_level_volts:.2f}V", end=", ")
+        print(f"{RED}AC RMS: [{rms_counts}] {rms_volts:.3f}V", end=", ")
+        print(f"{GREEN}p-p: [{pp_counts}] {pp_volts:.3f}V", end=", ")
+        print(f"{BLUE}Offset:  {dc_level} {dc_level_volts:.3f}V", end=", ")
         print(f"{MAGENTA}Freq: {freq_hz} Hz{RESET}")
 
         # Treat an all-zero response as not-ready/fail, matching the firmware behavior.
@@ -614,6 +614,7 @@ def main():
             successful_tests += 1
         total_tests += 1
         # Run Test 101: AC Measurement Test
+        print("NOTE: First freq result can be inaccurate due to no dc_level established yet.")
         if test101():
             successful_tests += 1
         total_tests += 1
@@ -634,7 +635,8 @@ def main():
             successful_tests += 1
         total_tests += 1
     else:
-        for i in range(0,3):
+        print("NOTE: First freq result can be inaccurate due to no dc_level established yet.")
+        for i in range(0,6):
             if test101():
                 successful_tests += 1
             total_tests += 1
