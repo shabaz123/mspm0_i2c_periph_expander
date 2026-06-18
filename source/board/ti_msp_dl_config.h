@@ -104,7 +104,7 @@ extern "C" {
 #define TIMER_ACMEAS_INST                                                (TIMG1)
 #define TIMER_ACMEAS_INST_IRQHandler                            TIMG1_IRQHandler
 #define TIMER_ACMEAS_INST_INT_IRQN                              (TIMG1_INT_IRQn)
-#define TIMER_ACMEAS_INST_LOAD_VALUE                                     (3999U)
+#define TIMER_ACMEAS_INST_LOAD_VALUE                                      (999U)
 #define TIMER_ACMEAS_INST_PUB_0_CH                                           (1)
 
 
